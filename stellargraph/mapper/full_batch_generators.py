@@ -50,6 +50,42 @@ from ..core.utils import GCN_Aadj_feats_op, PPNP_Aadj_feats_op
 from ..core.validation import comma_sep
 
 
+def _get_transform(transform, method, k, teleport_probability, use_sparse):
+    def transform(features, adjacency):
+        if transform is not None:
+            if callable(transform):
+                return transform(features=features, A=adjacency)
+            else:
+                raise ValueError("argument 'transform' must be a callable.")
+        if method in ["gcn", "sgc"]:
+            return GCN_Aadj_feats_op(features=features, A=adjacency, k=k, method=method)
+        if method in ["gat", "self_loops"]:
+            adjacency = adjacency + sps.diags(
+                np.ones(adjacency.shape[0]) - adjacency.diagonal()
+            )
+            return features, adjacency
+        if method in ["ppnp"]:
+            if use_sparse:
+                raise ValueError(
+                    "sparse: method='ppnp' requires 'sparse=False', found 'sparse=True' "
+                    "(consider using the APPNP model for sparse support)"
+                )
+            return PPNP_Aadj_feats_op(
+                features=features,
+                A=adjacency,
+                teleport_probability=teleport_probability,
+            )
+        if method in [None, "none"]:
+            return features, adjacency
+
+        raise ValueError(
+            "Undefined method for adjacency matrix transformation. "
+            "Accepted: 'gcn' (default), 'sgc', and 'self_loops'."
+        )
+
+    return transform
+
+
 class FullBatchGenerator(Generator):
     multiplicity = None
 
@@ -89,7 +125,8 @@ class FullBatchGenerator(Generator):
         # Create sparse adjacency matrix:
         # Use the node orderings the same as in the graph features
         self.node_list = G.nodes()
-        self.Aadj = G.to_adjacency_matrix()
+        adjacency = G.to_adjacency_matrix()
+        features = G.node_features(node_type=node_type)
 
         # Power-user feature: make the generator yield dense adjacency matrix instead
         # of the default sparse one.
@@ -104,58 +141,31 @@ class FullBatchGenerator(Generator):
         else:
             self.use_sparse = sparse
 
-        # Get the features for the nodes
-        self.features = G.node_features(node_type=node_type)
-
-        if transform is not None:
-            if callable(transform):
-                self.features, self.Aadj = transform(
-                    features=self.features, A=self.Aadj
-                )
-            else:
-                raise ValueError("argument 'transform' must be a callable.")
-
-        elif self.method in ["gcn", "sgc"]:
-            self.features, self.Aadj = GCN_Aadj_feats_op(
-                features=self.features, A=self.Aadj, k=self.k, method=self.method
-            )
-
-        elif self.method in ["gat", "self_loops"]:
-            self.Aadj = self.Aadj + sps.diags(
-                np.ones(self.Aadj.shape[0]) - self.Aadj.diagonal()
-            )
-
-        elif self.method in ["ppnp"]:
-            if self.use_sparse:
-                raise ValueError(
-                    "sparse: method='ppnp' requires 'sparse=False', found 'sparse=True' "
-                    "(consider using the APPNP model for sparse support)"
-                )
-            self.features, self.Aadj = PPNP_Aadj_feats_op(
-                features=self.features,
-                A=self.Aadj,
-                teleport_probability=self.teleport_probability,
-            )
-
-        elif self.method in [None, "none"]:
-            pass
-
-        else:
-            raise ValueError(
-                "Undefined method for adjacency matrix transformation. "
-                "Accepted: 'gcn' (default), 'sgc', and 'self_loops'."
-            )
+        self._transform = _get_transform(
+            transform, method, k, teleport_probability, self.use_sparse
+        )
+        self.features, self.Aadj = self._transform(features, adjacency)
 
     def num_batch_dims(self):
         return 2
 
-    def flow(self, node_ids, targets=None):
+    def _get_node_indices(self, ids):
+        # find the indices of the nodes, handling both multiplicity 1 [node, node, ...] and 2
+        # [(source, target), ...]
+        ids = np.asarray(ids)
+        flat_node_ids = ids.reshape(-1)
+        flat_node_indices = self.graph.node_ids_to_ilocs(flat_node_ids)
+
+        # back to the original shape
+        return flat_node_indices.reshape(ids.shape)
+
+    def flow(self, ids, targets=None):
         """
         Creates a generator/sequence object for training or evaluation
         with the supplied node ids and numeric targets.
 
         Args:
-            node_ids: an iterable of node ids for the nodes of interest
+            ids: an iterable of ids for the nodes or links of interest
                 (e.g., training, validation, or test set nodes)
             targets: a 1D or 2D array of numeric node targets with shape ``(len(node_ids),)``
                 or ``(len(node_ids), target_size)``
@@ -172,22 +182,48 @@ class FullBatchGenerator(Generator):
                 raise TypeError("Targets must be an iterable or None")
 
             # Check targets correct shape
-            if len(targets) != len(node_ids):
+            if len(targets) != len(ids):
                 raise TypeError("Targets must be the same length as node_ids")
 
-        # find the indices of the nodes, handling both multiplicity 1 [node, node, ...] and 2
-        # [(source, target), ...]
-        node_ids = np.asarray(node_ids)
-        flat_node_ids = node_ids.reshape(-1)
-        flat_node_indices = self.graph.node_ids_to_ilocs(flat_node_ids)
-        # back to the original shape
-        node_indices = flat_node_indices.reshape(node_ids.shape)
+        node_indices = self._get_node_indices(ids)
+
         if self.use_sparse:
             return SparseFullBatchSequence(
                 self.features, self.Aadj, targets, node_indices
             )
         else:
             return FullBatchSequence(self.features, self.Aadj, targets, node_indices)
+
+    def flow_exclude_node(self, ids, node_to_exclude):
+        nodes_with_exclusion = [
+            node if node != node_to_exclude else -1 for node in self.node_list
+        ]
+        features, adjacency = self._transform(
+            self.graph.node_features(nodes_with_exclusion),
+            self.graph.to_adjacency_matrix(self.node_list),
+        )
+
+        node_indices = self._get_node_indices(ids)
+
+        if self.use_sparse:
+            return SparseFullBatchSequence(features, adjacency, None, node_indices)
+        else:
+            return FullBatchSequence(features, adjacency, None, node_indices)
+
+    def flow_exclude_link(self, ids, link_to_exclude):
+        adjacency_with_exclusion = self.graph.to_adjacency_matrix(self.node_list)
+        adjacency_with_exclusion[link_to_exclude] = 0
+        adjacency_with_exclusion[link_to_exclude[::-1]] = 0
+        features, adjacency = self._transform(
+            self.graph.node_features(self.node_list), adjacency_with_exclusion
+        )
+
+        node_indices = self._get_node_indices(ids)
+
+        if self.use_sparse:
+            return SparseFullBatchSequence(features, adjacency, None, node_indices)
+        else:
+            return FullBatchSequence(features, adjacency, None, node_indices)
 
 
 class FullBatchNodeGenerator(FullBatchGenerator):
