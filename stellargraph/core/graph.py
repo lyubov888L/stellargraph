@@ -1106,11 +1106,13 @@ class StellarGraph:
             return f"{n1}-{rel}->{n2}"
 
         def str_node_type(count, nt):
-            feature_size, feature_dtype = feature_info[nt]
-            if feature_size > 0:
-                feature_text = f"{feature_dtype.name} vector, length {feature_size}"
-            else:
+            feature_shape, feature_dtype = feature_info[nt]
+            if len(feature_shape) > 1:
+                feature_text = f"{feature_dtype.name} tensor, shape {feature_shape}"
+            elif feature_shape[0] == 0:
                 feature_text = "none"
+            else:
+                feature_text = f"{feature_dtype.name} vector, length {feature_shape[0]}"
 
             edges = gs.schema[nt]
             if edges:

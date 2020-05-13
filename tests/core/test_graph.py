@@ -1147,7 +1147,7 @@ def test_info_homogeneous(is_directed):
 
 
 def test_info_heterogeneous():
-    g = example_hin_1({"A": 0, "B": 34}, reverse_order=True)
+    g = example_hin_1({"A": 0, "B": (34, 4)}, reverse_order=True)
     # literal match to check the output is good for human consumption
     assert (
         g.info()
@@ -1160,7 +1160,7 @@ StellarGraph: Undirected multigraph
     Features: none
     Edge types: A-R->B
   B: [3]
-    Features: float32 vector, length 34
+    Features: float32 tensor, shape (34, 4)
     Edge types: B-F->B, B-R->A
 
  Edge types:
