@@ -216,7 +216,7 @@ def test_graph_constructor_rowframe_numpy_homogeneous(rowframe_convert):
     np.testing.assert_array_equal(g.nodes(), [])
     assert g.node_features() is empty
 
-    arr = np.random.rand(3, 4)
+    arr = np.random.rand(3, 4, 5)
     edges = pd.DataFrame({"source": [0, 1], "target": [2, 2]})
     g = StellarGraph(rowframe_convert(arr), edges)
     np.testing.assert_array_equal(g.nodes(), [0, 1, 2])
@@ -224,7 +224,7 @@ def test_graph_constructor_rowframe_numpy_homogeneous(rowframe_convert):
 
 
 def test_graph_constructor_rowframe_numpy_heterogeneous(rowframe_convert):
-    arr1 = np.random.rand(3, 4)
+    arr1 = np.random.rand(3, 4, 5)
     arr2 = np.random.rand(6, 7)
     frame2 = RowFrame(arr2, index=range(100, 106))
 
@@ -235,7 +235,7 @@ def test_graph_constructor_rowframe_numpy_heterogeneous(rowframe_convert):
 
 
 def test_graph_constructor_rowframe_numpy_invalid():
-    arr1 = np.random.rand(3, 4)
+    arr1 = np.random.rand(3, 4, 5)
     arr2 = np.random.rand(6, 7)
 
     with pytest.raises(ValueError, match="expected IDs .*, found .* more: 0, 1, 2"):
@@ -256,12 +256,6 @@ def test_graph_constructor_rowframe_numpy_invalid():
         StellarGraph(
             RowFrame(index=["a", "c"]), pd.DataFrame({"source": ["a"], "target": ["b"]})
         )
-
-    # FIXME(#1524): this restriction on the shape should be lifted
-    with pytest.raises(
-        ValueError, match=r"features\['default'\]: expected 2 dimensions, found 3"
-    ):
-        StellarGraph(np.random.rand(3, 4, 5))
 
 
 def test_info():
@@ -369,6 +363,29 @@ def test_feature_conversion_from_nodes():
 
     assert aa.shape == (4, 8)
     assert sg.node_feature_sizes()["default"] == 8
+
+
+def test_node_feature_sizes_shapes():
+    arr1 = RowFrame(np.ones((3, 4)), index=range(3))
+    arr2 = RowFrame(np.ones((5, 6, 7)), index=range(3, 3 + 5))
+    g = StellarGraph({"a": arr1, "b": arr2})
+
+    assert g.node_feature_shapes() == {"a": (4,), "b": (6, 7)}
+    with pytest.raises(
+        ValueError,
+        match=r"node_feature_sizes expects node types .* found type 'b' with feature shape \(6, 7\)",
+    ):
+        g.node_feature_sizes()
+
+    assert g.node_feature_shapes(node_types=["a"]) == {"a": (4,)}
+    assert g.node_feature_sizes(node_types=["a"]) == {"a": 4}
+
+    assert g.node_feature_shapes(node_types=["b"]) == {"b": (6, 7)}
+    with pytest.raises(
+        ValueError,
+        match=r"node_feature_sizes expects node types .* found type 'b' with feature shape \(6, 7\)",
+    ):
+        g.node_feature_sizes(node_types=["b"])
 
 
 def test_node_features():

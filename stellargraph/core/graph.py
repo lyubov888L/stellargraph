@@ -823,12 +823,41 @@ class StellarGraph:
         """
         Get the feature sizes for the specified node types.
 
+        .. seealso:: :meth:`node_feature_shapes`
+
         Args:
             node_types (list, optional): A list of node types. If None all current node types
                 will be used.
 
         Returns:
             A dictionary of node type and integer feature size.
+        """
+
+        def get(name, shape):
+            if len(shape) != 1:
+                raise ValueError(
+                    f"node_feature_sizes expects node types that have feature vectors (rank 1), found type {name!r} with feature shape {shape}"
+                )
+
+            return shape[0]
+
+        return {
+            name: get(name, shape)
+            for name, shape in self.node_feature_shapes(node_types).items()
+        }
+
+    def node_feature_shapes(self, node_types=None):
+        """
+        Get the feature shapes for the specified node types.
+
+        .. seealso:: :meth:`node_feature_sizes`
+
+        Args:
+            node_types (list, optional): A list of node types. If None all current node types
+                will be used.
+
+        Returns:
+            A dictionary of node type and tuple feature shapes.
         """
         all_sizes = self._nodes.feature_info()
 
