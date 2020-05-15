@@ -27,10 +27,9 @@ from ..core.validation import require_integer_in_range
 
 
 class SlidingFeaturesNodeGenerator(Generator):
-    def __init__(
-        self, G, window_size,
-    ):
+    def __init__(self, G, window_size, batch_size=1):
         require_integer_in_range(window_size, "window_size", min_val=1)
+        require_integer_in_range(batch_size, "batch_size", min_val=1)
 
         self.graph = G
 
@@ -40,41 +39,65 @@ class SlidingFeaturesNodeGenerator(Generator):
         self._features = G.node_features(node_type=node_type)
 
         self._window_size = window_size
+        self._batch_size = batch_size
 
     def num_batch_dims(self):
         return 1
 
-    def flow(self, iloc_range, batch_size, target_distance=None):
-        if target_distance is not None:
-            require_integer_in_range(target_distance, "target_distance")
-
-        if batch_size is not None:
-            require_integer_in_range(batch_size, "batch_size")
-
-        if not isinstance(iloc_range, range):
-            raise ValueError("todo")
-
+    def flow(self, sequence_iloc_slice, target_distance=None):
         return SlidingFeaturesNodeSequence(
-            self._features, iloc_range, self._window_size, target_distance, batch_size
+            self._features,
+            self._window_size,
+            self._batch_size,
+            sequence_iloc_slice,
+            target_distance,
         )
 
 
 class SlidingFeaturesNodeSequence(Sequence):
-    def __init__(self, features, iloc_range, window_size, target_distance, batch_size):
-        self._num_nodes = features.shape[0]
-        self._num_sequence_samples = len(iloc_range)
-        self._num_sequence_variates = features.shape[2:]
+    def __init__(
+        self, features, window_size, batch_size, sequence_iloc_slice, target_distance
+    ):
+        if target_distance is not None:
+            require_integer_in_range(target_distance, "target_distance", min_val=1)
 
-        # have the first dimension be the slicing dimension
-        self._features = np.moveaxis(features, 1, 0)[iloc_range, ...]
+        if not isinstance(sequence_iloc_slice, slice):
+            raise TypeError(
+                f"sequence_iloc_slice: expected a slice(...) object, found {type(sequence_iloc_slice).__name__}"
+            )
 
-        self._times = times
+        if sequence_iloc_slice.step not in (None, 1):
+            raise TypeError(
+                f"sequence_iloc_slice: expected a slice object with a step = 1, found step = {sequence_iloc_slice.step}"
+            )
+
+        self._features = features[:, sequence_iloc_slice, ...]
+        shape = self._features.shape
+        self._num_nodes = shape[0]
+        self._num_sequence_samples = shape[1]
+        self._num_sequence_variates = shape[2:]
+
         self._window_size = window_size
         self._target_distance = target_distance
         self._batch_size = batch_size
 
         query_length = window_size + (0 if target_distance is None else target_distance)
         self._num_windows = self._num_sequence_samples - query_length + 1
+
+        # if there's not enough data to fill one window, there's a problem!
+        if self._num_windows <= 0:
+            if target_distance is None:
+                target_str = ""
+            else:
+                target_str = f" + target_distance={target_distance}"
+
+            total_sequence_samples = features.shape[1]
+            start, stop, step = sequence_iloc_slice.indices(total_sequence_samples)
+            assert step == 1
+
+            raise ValueError(
+                f"expected at least one sliding window of features, found a total window of size {query_length} (window_size={window_size}{target_str}) which is larger than the {self._num_sequence_samples} selected feature sample(s) (sequence_iloc_slice selected from {start} to {stop} in the sequence axis of length {total_sequence_samples})"
+            )
 
     def __len__(self):
         return int(np.ceil(self._num_windows / self._batch_size))
@@ -89,13 +112,14 @@ class SlidingFeaturesNodeSequence(Sequence):
         targets = [] if has_targets else None
         for start in range(first_start, last_start):
             end = start + self._window_size
-            arrays.append(self._features[start:end])
+            arrays.append(self._features[:, start:end, ...])
             if has_targets:
-                targets.append(self._features[end + self._target_distance - 1])
+                target_idx = end + self._target_distance - 1
+                targets.append(self._features[:, target_idx, ...])
 
         this_batch_size = last_start - first_start
 
-        batch_feats = np.moveaxis(np.stack(arrays), 1, 2)
+        batch_feats = np.stack(arrays)
         assert (
             batch_feats.shape
             == (this_batch_size, self._num_nodes, self._window_size)

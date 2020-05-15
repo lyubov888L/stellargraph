@@ -32,6 +32,12 @@ def test_sliding_generator_invalid():
     with pytest.raises(TypeError, match="window_size: expected int, found NoneType"):
         SlidingFeaturesNodeGenerator(example_graph(), window_size=None)
 
+    with pytest.raises(ValueError, match="batch_size: expected .* found 0"):
+        SlidingFeaturesNodeGenerator(example_graph(), window_size=1, batch_size=0)
+
+    with pytest.raises(TypeError, match="batch_size: expected int, found NoneType"):
+        SlidingFeaturesNodeGenerator(example_graph(), window_size=1, batch_size=None)
+
     with pytest.raises(ValueError, match="G: expected a graph .* node types: 'A', 'B'"):
         SlidingFeaturesNodeGenerator(example_hin_1(), window_size=1)
 
@@ -42,17 +48,41 @@ def _graph(shape):
 
 
 def test_sliding_generator_flow_invalid():
-    g = _graph(2, 10, 4)
+    g = _graph((2, 10, 4))
     gen = SlidingFeaturesNodeGenerator(g, window_size=2)
 
-    gen.flow(None)
-    gen.flow(range(100))
-    gen.flow(range(4, 10, 2))  # should be an error?
+    with pytest.raises(ValueError, match="target_distance: expected .* found 0"):
+        gen.flow(slice(None), target_distance=0)
+
+    with pytest.raises(TypeError, match="target_distance: expected .* found str"):
+        gen.flow(slice(None), target_distance="a")
+
+    with pytest.raises(
+        TypeError, match="sequence_iloc_slice: expected .* found NoneType"
+    ):
+        gen.flow(None)
+
+    with pytest.raises(
+        TypeError, match="sequence_iloc_slice: expected .* step = 1, found step = 2"
+    ):
+        gen.flow(slice(0, 4, 2))
+
+    with pytest.raises(
+        ValueError,
+        match=r"expected at least one .* window of size 2 \(window_size=2\) which is larger than the 1 selected feature sample\(s\) \(sequence_iloc_slice selected from 9 to 10 in the sequence axis of length 10\)",
+    ):
+        gen.flow(slice(9, 11))
+
+    with pytest.raises(
+        ValueError,
+        match="expected at least one .* window of size 11 \(window_size=2 \+ target_distance=9\) which is larger than the 10 selected feature sample\(s\) \(sequence_iloc_slice selected from 0 to 10 in the sequence axis of length 10\)",
+    ):
+        gen.flow(slice(None), target_distance=9)
 
 
 def _feat_getters(graph):
     def single(idx):
-        return graph.node_features()[:, start, ...]
+        return graph.node_features()[:, idx, ...]
 
     def several(start, end):
         return graph.node_features()[:, start:end, ...]
@@ -83,22 +113,23 @@ def _check_sequence(seq, expected):
             np.testing.assert_array_equal(targets, exp_targets)
 
 
-@pytest.mark.parametrize("variates", ["uni", "multi"])
-def test_sliding_sequence(variates):
-    if variates == "uni":
-        # 2 nodes with features: [0, 1, 2, 3], [4, 5, 6, 7]
-        shape = (2, 4)
-    else:
-        # 2 nodes with features: [[[0, 1]], [[2, 3]], [[4, 5]], [[6, 7]]], [[[8, 9]], ...]
-        shape = (2, 4, 1, 2)
+_SHAPES = {
+    # 2 nodes with features: [0, 1, 2, 3], [4, 5, 6, 7]
+    "uni": (2, 4),
+    # 2 nodes with features: [[[0, 1]], [[2, 3]], [[4, 5]], [[6, 7]]], [[[8, 9]], ...],
+    "multi": (2, 4, 1, 2),
+}
 
-    g = _graph(shape)
 
+@pytest.mark.parametrize("variates", _SHAPES.keys())
+def test_sliding_sequence_no_targets(variates):
+    g = _graph(_SHAPES[variates])
     single, several = _feat_getters(g)
+    everything = slice(None)
 
     # extreme case: window_size = 1
-    gen1 = SlidingFeaturesNodeGenerator(g, window_size=1)
-    seq = gen1.flow(range(0, 4), batch_size=3)
+    gen1 = SlidingFeaturesNodeGenerator(g, window_size=1, batch_size=3)
+    seq = gen1.flow(everything)
     _check_sequence(
         seq,
         [
@@ -107,7 +138,22 @@ def test_sliding_sequence(variates):
         ],
     )
 
-    seq = gen1.flow(range(0, 4), batch_size=2, target_distance=1)
+    gen2 = SlidingFeaturesNodeGenerator(g, window_size=2, batch_size=2)
+    seq = gen2.flow(everything)
+    _check_sequence(
+        seq, [([several(0, 2), several(1, 3)], None), ([several(2, 4)], None)]
+    )
+
+
+@pytest.mark.parametrize("variates", _SHAPES.keys())
+def test_sliding_sequence_targets(variates):
+    g = _graph(_SHAPES[variates])
+    single, several = _feat_getters(g)
+    everything = slice(None)
+
+    # extreme case: window_size = 1
+    gen1 = SlidingFeaturesNodeGenerator(g, window_size=1, batch_size=2)
+    seq = gen1.flow(everything, target_distance=1)
     _check_sequence(
         seq,
         [
@@ -116,11 +162,34 @@ def test_sliding_sequence(variates):
         ],
     )
 
-    gen2 = SlidingFeaturesNodeGenerator(g, window_size=2)
-    seq = gen2.flow(range(0, 4), batch_size=2)
+    seq = gen1.flow(everything, target_distance=1)
     _check_sequence(
-        seq, [([several(0, 2), several(1, 3)], None), ([several(2, 4)], None)]
+        seq,
+        [
+            ([several(0, 1), several(1, 2)], [single(1), single(2)]),
+            ([several(2, 3)], [single(3)]),
+        ],
     )
 
-    seq = gen2.flow(range(0, 4), batch_size=2, target_distance=1)
+    gen2 = SlidingFeaturesNodeGenerator(g, window_size=2, batch_size=2)
+    seq = gen2.flow(everything, target_distance=1)
     _check_sequence(seq, [([several(0, 2), several(1, 3)], [single(2), single(3)])])
+
+    seq = gen2.flow(everything, target_distance=2)
+    _check_sequence(seq, [([several(0, 2)], [single(3)])])
+
+
+def test_sliding_sequence_subslice():
+    g = _graph((2, 6))
+    single, several = _feat_getters(g)
+    # select the central 4 elements
+    four = slice(1, -1)
+
+    gen = SlidingFeaturesNodeGenerator(g, window_size=2, batch_size=2)
+    seq = gen.flow(four)
+    _check_sequence(
+        seq, [([several(1, 3), several(2, 4)], None), ([several(3, 5)], None)],
+    )
+
+    seq = gen.flow(four, target_distance=2)
+    _check_sequence(seq, [([several(1, 3)], [single(4)])])
