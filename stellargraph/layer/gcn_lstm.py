@@ -18,6 +18,7 @@ import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras import activations, initializers, constraints, regularizers
 from tensorflow.keras.layers import Input, Layer, Dropout, LSTM, Dense
+from ..mapper import SlidingFeaturesNodeGenerator
 from ..core.experimental import experimental
 from ..core.utils import calculate_laplacian
 
@@ -210,6 +211,7 @@ class GraphConvolutionLSTM:
         adj: unweighted/weighted adjacency matrix of [no.of nodes by no. of nodes dimension
         gc_layers: No. of Graph Convolution  layers in the stack. The output of each layer is equal to sequence length.
         lstm_layer_size (list of int): Output sizes of LSTM layers in the stack.
+        generator (SlidingFeaturesNodeGenerator): A generator instance.
         bias (bool): If True, a bias vector is learnt for each layer in the GCN model.
         dropout (float): Dropout rate applied to input features of each GCN layer.
         gc_activations (list of str or func): Activations applied to each layer's output;
@@ -231,6 +233,7 @@ class GraphConvolutionLSTM:
         gc_layers,
         lstm_layer_size,
         gc_activations,
+        generator=None,
         lstm_activations=["tanh"],
         bias=True,
         dropout=0.5,
@@ -241,6 +244,15 @@ class GraphConvolutionLSTM:
         bias_regularizer=None,
         bias_constraint=None,
     ):
+        if generator is not None:
+            if not isinstance(generator, SlidingFeaturesNodeGenerator):
+                raise ValueError(f"generator: expected a SlidingFeaturesNodeGenerator, found {type(generator).__name__}")
+
+            if seq_len is not None or adj is not None:
+                raise ValueError("expected only one of generator and (seq_len, adj) to be specified, found multiple")
+
+            adj = generator.graph.to_adjacency_matrix(weighted=True).todense()
+            seq_len = generator.window_size
 
         super(GraphConvolutionLSTM, self).__init__()
 
