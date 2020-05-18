@@ -22,6 +22,7 @@ from stellargraph import StellarGraph, RowFrame
 from stellargraph.mapper import SlidingFeaturesNodeGenerator
 from stellargraph.layer import GraphConvolutionLSTM
 
+
 def test_gcn_lstm_generator():
     nodes = RowFrame(np.arange(3 * 7).reshape(3, 7) / 21, index=["a", "b", "c"])
     edges = pd.DataFrame({"source": ["a", "b"], "target": ["b", "c"]})

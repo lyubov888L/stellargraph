@@ -63,7 +63,7 @@ class FixedAdjacencyGraphConvolution(Layer):
         bias_initializer="zeros",
         bias_regularizer=None,
         bias_constraint=None,
-        **kwargs
+        **kwargs,
     ):
         if "input_shape" not in kwargs and input_dim is not None:
             kwargs["input_shape"] = (input_dim,)
@@ -246,10 +246,14 @@ class GraphConvolutionLSTM:
     ):
         if generator is not None:
             if not isinstance(generator, SlidingFeaturesNodeGenerator):
-                raise ValueError(f"generator: expected a SlidingFeaturesNodeGenerator, found {type(generator).__name__}")
+                raise ValueError(
+                    f"generator: expected a SlidingFeaturesNodeGenerator, found {type(generator).__name__}"
+                )
 
             if seq_len is not None or adj is not None:
-                raise ValueError("expected only one of generator and (seq_len, adj) to be specified, found multiple")
+                raise ValueError(
+                    "expected only one of generator and (seq_len, adj) to be specified, found multiple"
+                )
 
             adj = generator.graph.to_adjacency_matrix(weighted=True).todense()
             seq_len = generator.window_size
